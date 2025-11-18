@@ -315,6 +315,185 @@ For best results, use **CH32X035** with:
 - [WCH Official Site](https://www.wch-ic.com/products/CH32X035.html)
 - [Datasheet PDF](https://www.wch-ic.com/downloads/CH32X035DS0_PDF.html)
 
+---
+
+## Example: Puya PY32F072 Port (ARM Cortex-M0+)
+
+The PY32F072 is a low-cost STM32F072 alternative from Puya Semiconductor. It's nearly pin-compatible and uses a similar HAL structure.
+
+### Hardware Capabilities
+
+| Feature | PY32F072 | STM32F072 | Notes |
+|---------|----------|-----------|-------|
+| Core | Cortex-M0+ @ **72MHz** | Cortex-M0 @ 48MHz | **50% faster!** |
+| Flash | **128KB** | 64-128KB | More memory |
+| SRAM | **16KB** | 16KB | Same |
+| ADC | 12-bit | 12-bit | Compatible |
+| **DAC** | **2x 12-bit** ✓ | 2x 12-bit ✓ | **Perfect match!** |
+| USB | 2.0 Full-Speed ✓ | 2.0 Full-Speed ✓ | Compatible |
+| Timers | **13 timers** | 11 timers | More timers |
+| OPA/CMP | **3+3** | 0 | Extra features! |
+| CAN | **2.0** | 2.0 | Compatible |
+| Price | **~$0.50** | ~$2-3 | **Much cheaper!** |
+
+### Why Choose PY32F072?
+
+**✅ PROS:**
+- **Drop-in replacement** for STM32F072 hardware
+- **Faster** CPU (72MHz vs 48MHz)
+- **Cheaper** ($0.50 vs $2+)
+- **Same HAL structure** - easy porting
+- **2x hardware DAC** - perfect for VDD/VPP generation
+- **More peripherals** (OPA, comparators)
+- Uses existing hardware design (op-amps, boost circuits)
+
+**⚠️ CONS:**
+- Not 100% register-compatible (subtle differences)
+- No LL (Low-Layer) library available
+- Less mature ecosystem than STM32
+- Factory calibration addresses may differ
+
+### Porting Steps
+
+The port is **95% compatible** with STM32F072 code:
+
+1. **Replace STM32 HAL with PY32 HAL**:
+```bash
+# Remove STM32 HAL library
+rm -rf Firmware/source/Inc/stm32f0xx_hal*
+
+# Add PY32 HAL library (download from GitHub)
+# https://github.com/IOsetting/py32f0-template
+cp -r PY32F07x_HAL_Driver Firmware/source/Inc/
+```
+
+2. **Enable PY32F072 in fpdk_board.h**:
+```c
+// #define FPDK_BOARD_STM32F072    1
+#define FPDK_BOARD_PY32F072    1
+```
+
+3. **Update include in main.c**:
+```c
+// Old: #include "stm32f0xx_hal.h"
+#include "py32f0xx_hal.h"
+```
+
+4. **Verify calibration addresses**:
+Check PY32F072 datasheet for factory calibration memory locations.
+
+5. **Adjust timing** (already done in fpdk_board.h):
+```c
+// PY32F072 @ 72MHz needs 1.5x loop count vs STM32F072 @ 48MHz
+asm volatile ("MOV R0,%[loops]\n1:\nSUB R0,#1\nCMP R0,#0\nBNE 1b"
+              :: [loops]"r"(15*us) : "memory");
+```
+
+### Hardware Compatibility
+
+The PY32F072 can use the **exact same PCB** as STM32F072:
+- Same pinout (LQFP48/LQFP64)
+- Same DAC outputs
+- Same voltage reference
+- Same USB pins
+- Same ADC inputs
+
+**Result:** Just swap the chip, update firmware, done!
+
+### Development Tools
+
+- **IDE**: Any ARM IDE (Keil, IAR, PlatformIO, VS Code)
+- **Toolchain**: ARM GCC (arm-none-eabi)
+- **Programmer**: J-Link, ST-Link (yes, ST-Link works!), PyOCD
+- **Debugger**: Standard ARM SWD
+
+### Resources
+
+- [PY32F0 Template](https://github.com/IOsetting/py32f0-template)
+- [Official Site](https://www.puyasemi.com/en/py32_series.html)
+- [Datasheet PDF](https://download.py32.org/Datasheet/en/PY32F072_Datasheet_Rev1.1_EN.pdf)
+
+---
+
+## Example: WCH CH32V003 Port (RISC-V Ultra Low-Cost)
+
+The CH32V003 is the **world's cheapest microcontroller** (~$0.10) with RISC-V core. It's challenging but possible!
+
+### Hardware Capabilities
+
+| Feature | CH32V003 | Challenge Level |
+|---------|----------|----------------|
+| Core | RISC-V RV32EC @ 48MHz | ⚠️ Minimal ISA |
+| Flash | **16KB** | ⚠️ Tight fit |
+| SRAM | **2KB** | 🔴 **CRITICAL** |
+| ADC | **10-bit** (not 12-bit) | ⚠️ Lower resolution |
+| **DAC** | **NONE** 🔴 | 🔴 **PWM required** |
+| **USB** | **NONE** 🔴 | 🔴 **Software USB required** |
+| Timers | Advanced + General ✓ | ✅ OK |
+| OPA/CMP | 1 set ✓ | ✅ Helpful |
+| GPIO | Up to 18 pins | ⚠️ Limited |
+| Price | **~$0.10** | ✅ **Incredible!** |
+
+### Critical Challenges
+
+**🔴 Memory Crisis:**
+- Only **2KB SRAM**! Original firmware uses ~8-10KB
+- **SOLUTION**: Strip down to bare minimum
+  - Remove debug strings
+  - Reduce buffer sizes
+  - Support only 1-2 IC types
+  - Remove calibration feature
+
+**🔴 No Hardware USB:**
+- Must use [rv003usb](https://github.com/cnlohr/rv003usb) software USB
+- USB Low-Speed only (1.5 Mbps)
+- **Voltage limit: Max 3.6V** for reliable operation
+
+**🔴 No Hardware DAC:**
+- Must use PWM + RC filter
+- 10-bit PWM resolution (1024 levels)
+- More noise than hardware DAC
+
+### External Circuits Required
+
+```
+USB D+/D- (bit-bang)
+   ↓
+CH32V003 ──→ PWM_VDD ──→ RC Filter ──→ Op-Amp ──→ Buck-Boost ──→ VDD (2-7V)
+         ↓
+         ──→ PWM_VPP ──→ RC Filter ──→ Op-Amp ──→ Boost Conv ──→ VPP (5-14V)
+```
+
+**Component count:** 2x RC filters, 2x Op-amps, 2x DC-DC converters, voltage dividers
+
+### Is It Worth It?
+
+**Honestly? Probably not for production.**
+
+| Metric | CH32V003 | CH32X035 |
+|--------|----------|----------|
+| MCU Cost | $0.10 | $0.30 |
+| External BOM | ~$2.00 | ~$1.00 |
+| **Total** | **$2.10** | **$1.30** |
+| Complexity | Very high | Low |
+| Features | Minimal | Full |
+
+**Verdict:** CH32X035 is cheaper AND better!
+
+### When to Use CH32V003
+
+- Learning RISC-V architecture
+- Educational projects
+- You enjoy challenges!
+
+### Resources
+
+- [CH32V003 GitHub](https://github.com/openwch/ch32v003)
+- [rv003usb Library](https://github.com/cnlohr/rv003usb)
+- [Datasheet PDF](https://www.wch-ic.com/downloads/CH32V003DS0_PDF.html)
+
+---
+
 ## Timing Considerations
 
 The IC programming protocol requires **precise microsecond timing**:
