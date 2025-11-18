@@ -32,7 +32,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 // Select board type (uncomment one):
 #define FPDK_BOARD_STM32F072    1
-// #define FPDK_BOARD_CUSTOM    1
+// #define FPDK_BOARD_CH32X033   1
+// #define FPDK_BOARD_CH32X035   1
+// #define FPDK_BOARD_CUSTOM     1
 
 // ============================================================================
 // STM32F072 Board Implementation
@@ -102,6 +104,145 @@ static inline void FPDK_DelayUS(uint32_t us) {
 }
 
 #endif // FPDK_BOARD_STM32F072
+
+// ============================================================================
+// WCH CH32X033/CH32X035 Board Implementation (RISC-V)
+// ============================================================================
+
+#if defined(FPDK_BOARD_CH32X033) || defined(FPDK_BOARD_CH32X035)
+
+/*
+ * Hardware Notes for CH32X033/35 Port:
+ *
+ * CRITICAL REQUIREMENT: External voltage boost circuits needed!
+ * The Easy PDK Programmer requires:
+ *   - VDD: 2.0V to 6.26V (adjustable)
+ *   - VPP: 5.0V to 13.27V (adjustable)
+ *
+ * Since CH32X033/35 operates at 3.3V or 5V, you must add:
+ *   1. Boost converter or charge pump for VPP (up to 14V)
+ *   2. Buck-boost or adjustable regulator for VDD (2-7V range)
+ *   3. Voltage divider feedback to ADC for monitoring
+ *
+ * DAC Options:
+ *   - CH32X035: Has hardware DAC (recommended)
+ *   - CH32X033: Use PWM + RC filter or external DAC chip
+ *
+ * MCU Capabilities:
+ *   - QingKe RISC-V4C core @ 48MHz (RV32IMAC)
+ *   - CH32X033: 62KB Flash, 20KB SRAM
+ *   - CH32X035: 48KB Flash, 20KB SRAM
+ *   - 12-bit ADC, TouchKey, OPA/PGA, Comparators
+ *   - USB 2.0 Full-Speed Device
+ *   - Advanced Timers with PWM support
+ */
+
+// Include CH32X033/35 peripheral library headers
+#include "ch32x035.h"           // Main device header
+#include "ch32x035_gpio.h"      // GPIO functions
+#include "ch32x035_rcc.h"       // Clock control
+#include "ch32x035_tim.h"       // Timer functions
+#include "ch32x035_adc.h"       // ADC functions
+#ifdef FPDK_BOARD_CH32X035
+#include "ch32x035_dac.h"       // DAC (CH32X035 only)
+#endif
+
+// Pin definitions - Customize these for your board layout
+// These are example pin assignments - adjust for your hardware!
+#define FPDK_PIN_CLK2_PORT      GPIOA
+#define FPDK_PIN_CLK2           GPIO_Pin_0
+#define FPDK_PIN_CLK_PORT       GPIOA
+#define FPDK_PIN_CLK            GPIO_Pin_3
+#define FPDK_PIN_DAT_PORT       GPIOA
+#define FPDK_PIN_DAT            GPIO_Pin_6
+#define FPDK_PIN_DAT_O_PORT     GPIOA
+#define FPDK_PIN_DAT_O          GPIO_Pin_4
+#define FPDK_PIN_CMT_PORT       GPIOA
+#define FPDK_PIN_CMT            GPIO_Pin_7
+
+// Board-specific voltage values (depends on external boost circuit design)
+// These values assume external op-amps with similar gain to STM32F072 board
+#define FPDK_VDD_DAC_MAX_MV         6260
+#define FPDK_VPP_DAC_MAX_MV         13270
+
+// CH32X033/35 chip-specific values
+#define FPDK_VREFINT_CAL            1500    // Typical internal reference (check datasheet)
+#define FPDK_VDD_VALUE              3300    // Board VDD in mV (3.3V or 5.0V)
+
+// GPIO macros for programming IO
+#define FPDK_CLK2_UP()              GPIO_SetBits(FPDK_PIN_CLK2_PORT, FPDK_PIN_CLK2)
+#define FPDK_CLK2_DOWN()            GPIO_ResetBits(FPDK_PIN_CLK2_PORT, FPDK_PIN_CLK2)
+#define FPDK_CLK_UP()               GPIO_SetBits(FPDK_PIN_CLK_PORT, FPDK_PIN_CLK)
+#define FPDK_CLK_DOWN()             GPIO_ResetBits(FPDK_PIN_CLK_PORT, FPDK_PIN_CLK)
+#define FPDK_SET_DAT_O(bit)         GPIO_WriteBit(FPDK_PIN_DAT_O_PORT, FPDK_PIN_DAT_O, (bit) ? Bit_SET : Bit_RESET)
+#define FPDK_SET_DAT_F(bit)         GPIO_WriteBit(FPDK_PIN_DAT_PORT, FPDK_PIN_DAT, (bit) ? Bit_SET : Bit_RESET)
+#define FPDK_GET_DAT()              GPIO_ReadInputDataBit(FPDK_PIN_DAT_PORT, FPDK_PIN_DAT)
+#define FPDK_SET_CMT(bit)           GPIO_WriteBit(FPDK_PIN_CMT_PORT, FPDK_PIN_CMT, (bit) ? Bit_SET : Bit_RESET)
+
+// GPIO configuration functions
+typedef struct {
+  GPIO_TypeDef* Port;
+  uint16_t Pin;
+  GPIOMode_TypeDef Mode;
+  GPIOSpeed_TypeDef Speed;
+} FPDK_GPIO_InitTypeDef;
+
+static inline void FPDK_GPIO_SetMode_Output(void* port, uint16_t pin) {
+  GPIO_WriteBit((GPIO_TypeDef*)port, pin, Bit_RESET);
+  GPIO_InitTypeDef init = {
+    .GPIO_Pin = pin,
+    .GPIO_Mode = GPIO_Mode_Out_PP,
+    .GPIO_Speed = GPIO_Speed_50MHz
+  };
+  GPIO_Init((GPIO_TypeDef*)port, &init);
+}
+
+static inline void FPDK_GPIO_SetMode_Input(void* port, uint16_t pin) {
+  GPIO_InitTypeDef init = {
+    .GPIO_Pin = pin,
+    .GPIO_Mode = GPIO_Mode_IPD,  // Input with pull-down
+    .GPIO_Speed = GPIO_Speed_50MHz
+  };
+  GPIO_Init((GPIO_TypeDef*)port, &init);
+}
+
+static inline void FPDK_GPIO_Write(void* port, uint16_t pin, bool state) {
+  GPIO_WriteBit((GPIO_TypeDef*)port, pin, state ? Bit_SET : Bit_RESET);
+}
+
+static inline bool FPDK_GPIO_Read(void* port, uint16_t pin) {
+  return GPIO_ReadInputDataBit((GPIO_TypeDef*)port, pin) != Bit_RESET;
+}
+
+// Timing functions
+static inline uint32_t FPDK_GetTick(void) {
+  // Assumes you have a SysTick or timer-based millisecond counter
+  // Implement this based on your system tick configuration
+  extern volatile uint32_t system_tick_ms;  // Define this in your main.c
+  return system_tick_ms;
+}
+
+// Microsecond delay for RISC-V QingKe core @ 48MHz
+// This is a simple cycle-counting delay - adjust loops for your clock speed
+static inline void FPDK_DelayUS(uint32_t us) {
+  // At 48MHz: 48 cycles per microsecond
+  // Assuming ~4 cycles per loop iteration: 12 loops per microsecond
+  // Adjust this multiplier based on actual timing measurements
+  for(uint32_t i = 0; i < us * 12; i++) {
+    __asm__ volatile ("nop");
+  }
+}
+
+/*
+ * Alternative: Use WCH peripheral library delay functions
+ * If you've initialized the delay system with Delay_Init():
+ *
+ * static inline void FPDK_DelayUS(uint32_t us) {
+ *   Delay_Us(us);
+ * }
+ */
+
+#endif // FPDK_BOARD_CH32X033 || FPDK_BOARD_CH32X035
 
 // ============================================================================
 // Custom Board Template (for porting)

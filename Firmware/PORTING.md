@@ -173,6 +173,148 @@ static inline void FPDK_DelayUS(uint32_t us) {
 #endif // FPDK_BOARD_ESP32
 ```
 
+## Example: WCH CH32X033/X035 Port (RISC-V)
+
+The CH32X033 and CH32X035 are low-cost RISC-V microcontrollers from WCH with USB support. A reference implementation is included in `fpdk_board.h`.
+
+### Hardware Capabilities
+
+| Feature | CH32X033 | CH32X035 |
+|---------|----------|----------|
+| Core | QingKe RISC-V4C @ 48MHz | QingKe RISC-V4C @ 48MHz |
+| Flash | 62KB | 48KB |
+| SRAM | 20KB | 20KB |
+| ADC | 12-bit, 14 channels | 12-bit, 14 channels |
+| **DAC** | **No (use PWM)** | **Yes (hardware DAC)** |
+| USB | 2.0 Full-Speed Device | 2.0 Full-Speed Device |
+| USB PD | No | Yes |
+| Timers | Advanced + General | Advanced + General |
+| OPA/PGA | 2 sets | 2 sets |
+| Price | ~$0.20 | ~$0.30 |
+
+### Critical Hardware Requirements
+
+**⚠️ IMPORTANT**: The CH32X033/35 cannot directly generate the high voltages needed for IC programming!
+
+You **must** add external circuits:
+
+1. **VPP Boost Converter** (5V → 14V)
+   - Charge pump or boost converter
+   - Controlled by DAC/PWM output
+   - Voltage divider feedback to ADC
+
+2. **VDD Regulator** (2V → 7V range)
+   - Buck-boost converter or adjustable LDO
+   - Controlled by DAC/PWM output
+   - Voltage divider feedback to ADC
+
+3. **DAC Implementation**
+   - **CH32X035**: Use hardware DAC (recommended)
+   - **CH32X033**: Use PWM + RC filter (R=6.8kΩ, C=470nF)
+
+### Example Hardware Schematic
+
+```
+CH32X035 DAC_OUT ──┬─── [Op-Amp Buffer] ──── [Boost Converter] ──── VPP (14V max)
+                   │                             │
+                   │                             └─── [Voltage Divider] ──── ADC_IN
+                   │
+                   └─── [Op-Amp Buffer] ──── [Buck-Boost] ──── VDD (7V max)
+                                               │
+                                               └─── [Voltage Divider] ──── ADC_IN
+```
+
+### Pin Mapping Example
+
+Modify these in `fpdk_board.h` for your board:
+
+```c
+#define FPDK_PIN_CLK2_PORT      GPIOA
+#define FPDK_PIN_CLK2           GPIO_Pin_0
+#define FPDK_PIN_CLK_PORT       GPIOA
+#define FPDK_PIN_CLK            GPIO_Pin_3
+#define FPDK_PIN_DAT_PORT       GPIOA
+#define FPDK_PIN_DAT            GPIO_Pin_6
+#define FPDK_PIN_DAT_O_PORT     GPIOA
+#define FPDK_PIN_DAT_O          GPIO_Pin_4
+#define FPDK_PIN_CMT_PORT       GPIOA
+#define FPDK_PIN_CMT            GPIO_Pin_7
+```
+
+### Using the Port
+
+1. **Enable the board definition** in `fpdk_board.h`:
+```c
+// #define FPDK_BOARD_STM32F072    1
+#define FPDK_BOARD_CH32X035    1   // Or CH32X033
+```
+
+2. **Install WCH peripheral library**:
+```bash
+# Download from: https://github.com/openwch/ch32x035
+# Extract to: Firmware/source/Inc/
+```
+
+3. **Implement system tick** in your `main.c`:
+```c
+volatile uint32_t system_tick_ms = 0;
+
+void SysTick_Handler(void) {
+    system_tick_ms++;
+}
+```
+
+4. **Initialize delay system** (if using WCH library):
+```c
+Delay_Init();  // Call in main() before using delays
+```
+
+5. **Calibrate timing**: The `FPDK_DelayUS()` uses cycle counting. Measure actual delays with oscilloscope and adjust the multiplier in `fpdk_board.h`:
+```c
+// Adjust '12' based on measurements
+for(uint32_t i = 0; i < us * 12; i++) {
+    __asm__ volatile ("nop");
+}
+```
+
+### Known Limitations
+
+1. **No factory-calibrated ADC reference** like STM32
+   - You may need manual calibration
+
+2. **CH32X033 lacks hardware DAC**
+   - PWM approach adds noise
+   - Consider external DAC chip (e.g., MCP4725)
+
+3. **USB PD only on CH32X035**
+   - Cannot use PD for self-powering on CH32X033
+
+4. **External voltage circuits required**
+   - Adds complexity and cost
+   - Needs careful PCB design
+
+### Recommended Configuration
+
+For best results, use **CH32X035** with:
+- Hardware DAC for clean voltage control
+- TPS61230 boost converter for VPP
+- TPS63000 buck-boost for VDD
+- Precision voltage dividers (0.1% resistors)
+- Decoupling capacitors near converters
+
+### Development Tools
+
+- **IDE**: MounRiver Studio (Eclipse-based)
+- **Toolchain**: RISC-V GCC
+- **Programmer**: WCH-Link
+- **Debugger**: WCH-Link with GDB support
+
+### Resources
+
+- [CH32X035 GitHub](https://github.com/openwch/ch32x035)
+- [WCH Official Site](https://www.wch-ic.com/products/CH32X035.html)
+- [Datasheet PDF](https://www.wch-ic.com/downloads/CH32X035DS0_PDF.html)
+
 ## Timing Considerations
 
 The IC programming protocol requires **precise microsecond timing**:
