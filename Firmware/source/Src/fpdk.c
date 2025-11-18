@@ -962,7 +962,16 @@ uint16_t FPDK_WriteIC(const uint16_t ic_id, const FPDKICTYPE type,
     memset( write_buf, 0xFF, sizeof(write_buf) );                                                  //initialize empty write buffer (all bits '1')
 
     uint32_t write_count = (count>(p+write_block_size-1))?write_block_size:(count-p);
-    memcpy( &write_buf[addr % write_block_size], &data[p], write_count*sizeof(uint16_t) );         //place data to write in write buffer (aligned to block size)
+    uint32_t offset = addr % write_block_size;
+
+    // Validate buffer bounds to prevent overflow
+    if( offset + write_count > write_block_size )
+    {
+      _FPDK_LeaveProgramingMode(type, 100000);
+      return FPDK_ERR_UKNOWN;
+    }
+
+    memcpy( &write_buf[offset], &data[p], write_count*sizeof(uint16_t) );         //place data to write in write buffer (aligned to block size)
 
     bool block_is_empty = true;
     for( uint32_t c=0; c<write_block_size; c++ )                                                   //check of complete block is empty (all bits '1')

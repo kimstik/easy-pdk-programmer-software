@@ -475,6 +475,15 @@ void FPDKUSB_HandleCommands(void)
 
   uint32_t cmd_length = _packetbuf[1];
 
+  // Validate packet length to prevent buffer overflow
+  // _packetbuf is 258 bytes, so max payload is 254 bytes (258 - 2 byte header - 2 byte margin)
+  if( cmd_length > 254 )
+  {
+    _FPDKUSB_SendError(0, 0);
+    _packetbufpos = 0;  // Reset buffer on invalid packet
+    return;
+  }
+
   if( _packetbufpos < (2+cmd_length) )
     return;
 
