@@ -17,8 +17,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "fpdk.h"
 #include "fpdkproto.h"
+#include "fpdk_board.h"
 
-#include "main.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -34,47 +34,24 @@ extern DMA_HandleTypeDef  hdma_spi1_tx;
 extern DMA_HandleTypeDef  hdma_spi1_rx;
 extern UART_HandleTypeDef huart1;
 
-//board specific defines for programing IO
-#define _FPDK_CLK2_UP()      HAL_GPIO_WritePin( IC_IO_PA0_UART1_TX_GPIO_Port, IC_IO_PA0_UART1_TX_Pin, GPIO_PIN_SET )
-#define _FPDK_CLK2_DOWN()    HAL_GPIO_WritePin( IC_IO_PA0_UART1_TX_GPIO_Port, IC_IO_PA0_UART1_TX_Pin, GPIO_PIN_RESET )
-#define _FPDK_CLK_UP()       HAL_GPIO_WritePin( IC_IO_PA3_CLK_GPIO_Port, IC_IO_PA3_CLK_Pin, GPIO_PIN_SET )
-#define _FPDK_CLK_DOWN()     HAL_GPIO_WritePin( IC_IO_PA3_CLK_GPIO_Port, IC_IO_PA3_CLK_Pin, GPIO_PIN_RESET )
-#define _FPDK_SET_DAT_O(bit) HAL_GPIO_WritePin( IC_IO_PA4_GPIO_Port,     IC_IO_PA4_Pin,     bit?GPIO_PIN_SET:GPIO_PIN_RESET )
-#define _FPDK_SET_DAT_F(bit) HAL_GPIO_WritePin( IC_IO_PA6_DAT_GPIO_Port, IC_IO_PA6_DAT_Pin, bit?GPIO_PIN_SET:GPIO_PIN_RESET )
-#define _FPDK_GET_DAT()      HAL_GPIO_ReadPin(  IC_IO_PA6_DAT_GPIO_Port, IC_IO_PA6_DAT_Pin )
-#define _FPDK_SET_CMT(bit)   HAL_GPIO_WritePin( IC_IO_PA7_USART1_RX_GPIO_Port, IC_IO_PA7_USART1_RX_Pin, bit?GPIO_PIN_SET:GPIO_PIN_RESET )
-
-//general macros for programing IO
-void    _FPDK_DelayUS(uint32_t us) { asm volatile ("MOV R0,%[loops]\n1:\nSUB R0,#1\nCMP R0,#0\nBNE 1b"::[loops]"r"(10*us):"memory"); }
-#define _FPDK_Clock()        { _FPDK_CLK_UP(); _FPDK_DelayUS(1); _FPDK_CLK_DOWN(); }
-#define _FPDK_Clock2()       { _FPDK_CLK2_UP(); _FPDK_DelayUS(1);_FPDK_CLK2_DOWN(); }
-#define _FPDK_Commit2()      { _FPDK_SET_CMT(1);_FPDK_DelayUS(1); _FPDK_SET_CMT(0); _FPDK_Clock2(); }
-#define _FPDK_SendBitO(bit)  { _FPDK_SET_DAT_O(bit); _FPDK_Clock(); }
-#define _FPDK_SendBitO2(bit) { _FPDK_SET_DAT_O(bit); _FPDK_Clock2(); }
-#define _FPDK_SendBitF(bit)  { _FPDK_SET_DAT_F(bit); _FPDK_Clock(); }
-#define _FPDK_RecvBit()      ({ _FPDK_CLK_UP(); _FPDK_DelayUS(1); uint32_t bit=_FPDK_GET_DAT(); _FPDK_CLK_DOWN(); bit; })
-#define _FPDK_RecvBit2()     ({ _FPDK_CLK2_UP(); _FPDK_DelayUS(1); uint32_t bit=_FPDK_GET_DAT(); _FPDK_CLK2_DOWN(); bit; })
-
-//board specific max values (DAC max => mV max after opamp output / -30 mV DAC DC offset)
-#define FPDK_VDD_DAC_MAX_MV ( 6290 - 30)
-#define FPDK_VPP_DAC_MAX_MV (13300 - 30)
-
-//STM32F072 chip specific factory calibration values in rom
-#define TEMP030_CAL ((uint32_t)*((uint16_t*)0x1FFFF7B8))
-#define TEMP110_CAL ((uint32_t)*((uint16_t*)0x1FFFF7C2))
-#define VREFINT_CAL ((uint32_t)*((uint16_t*)0x1FFFF7BA))
-
-//PDK command timings
-#define FPDK_VPP_CMD_STABELIZE_DELAYUS  100
-#define FPDK_VDD_CMD_STABELIZE_DELAYUS  500
-#define FPDK_VPP_R_STABELIZE_DELAYUS    1000
-#define FPDK_VDD_R_STABELIZE_DELAYUS    1000
-#define FPDK_VPP_EW_STABELIZE_DELAYUS   10000
-#define FPDK_VDD_EW_STABELIZE_DELAYUS   10000
-#define FPDK_VDD_STOP_DELAYUS           0 //250
-#define FPDK_VPP_STOP_DELAYUS           0 //100
-#define FPDK_LEAVE_PROG_MODE_DELAYUS    10000  //IMPORTANT: wait a bit after leaving program mode, before executing next command
-#define FPDK_VDD_CAL_STARTUP_DELAYUS    1000
+// Internal macros using board abstraction layer
+#define _FPDK_CLK2_UP()      FPDK_CLK2_UP()
+#define _FPDK_CLK2_DOWN()    FPDK_CLK2_DOWN()
+#define _FPDK_CLK_UP()       FPDK_CLK_UP()
+#define _FPDK_CLK_DOWN()     FPDK_CLK_DOWN()
+#define _FPDK_SET_DAT_O(bit) FPDK_SET_DAT_O(bit)
+#define _FPDK_SET_DAT_F(bit) FPDK_SET_DAT_F(bit)
+#define _FPDK_GET_DAT()      FPDK_GET_DAT()
+#define _FPDK_SET_CMT(bit)   FPDK_SET_CMT(bit)
+#define _FPDK_DelayUS(us)    FPDK_DelayUS(us)
+#define _FPDK_Clock()        FPDK_Clock()
+#define _FPDK_Clock2()       FPDK_Clock2()
+#define _FPDK_Commit2()      FPDK_Commit2()
+#define _FPDK_SendBitO(bit)  FPDK_SendBitO(bit)
+#define _FPDK_SendBitO2(bit) FPDK_SendBitO2(bit)
+#define _FPDK_SendBitF(bit)  FPDK_SendBitF(bit)
+#define _FPDK_RecvBit()      FPDK_RecvBit()
+#define _FPDK_RecvBit2()     FPDK_RecvBit2()
 
 //FPDK hardware varaint
 static FPDKHWVARIANT _hw_variant;
@@ -104,7 +81,7 @@ static void _FPDK_ADC_HandleData(const uint16_t* adcdata)
     avref+=adcdata[p*3+2];
   }
 
-  _adc_vref = (3*_adc_vref + ((8 * VDD_VALUE * VREFINT_CAL)) / avref) / 4;                         //average vref also over last measurements
+  _adc_vref = (3*_adc_vref + ((8 * FPDK_VDD_VALUE * FPDK_VREFINT_CAL)) / avref) / 4;                         //average vref also over last measurements
   _adc_vdd = (_adc_vref*avdd*6)>>15;                                                               //factor 6 by voltage divider resistors, >>15 = /4096 / 8
   _adc_vpp = (_adc_vref*avpp*6)>>15;
 }
